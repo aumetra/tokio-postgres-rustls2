@@ -75,12 +75,21 @@ where
                 .connector
                 .connect(self.0.hostname, stream)
                 .await
-                .map(|s| RustlsStream(Box::pin(s)))
+                .map(|s| RustlsStream(s))
         })
     }
 }
 
-pub struct RustlsStream<S>(Pin<Box<TlsStream<S>>>);
+pub struct RustlsStream<S>(TlsStream<S>);
+
+impl<S> RustlsStream<S>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    fn project_stream(self: Pin<&mut Self>) -> Pin<&mut (impl AsyncRead + AsyncWrite)> {
+        unsafe { self.map_unchecked_mut(|s| &mut s.0) }
+    }
+}
 
 impl<S> tokio_postgres::tls::TlsStream for RustlsStream<S>
 where
@@ -123,11 +132,11 @@ where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     fn poll_read(
-        mut self: Pin<&mut Self>,
+        self: Pin<&mut Self>,
         cx: &mut Context,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<tokio::io::Result<()>> {
-        self.0.as_mut().poll_read(cx, buf)
+        self.project_stream().poll_read(cx, buf)
     }
 }
 
@@ -136,19 +145,19 @@ where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     fn poll_write(
-        mut self: Pin<&mut Self>,
+        self: Pin<&mut Self>,
         cx: &mut Context,
         buf: &[u8],
     ) -> Poll<tokio::io::Result<usize>> {
-        self.0.as_mut().poll_write(cx, buf)
+        self.project_stream().poll_write(cx, buf)
     }
 
-    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<tokio::io::Result<()>> {
-        self.0.as_mut().poll_flush(cx)
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context) -> Poll<tokio::io::Result<()>> {
+        self.project_stream().poll_flush(cx)
     }
 
-    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<tokio::io::Result<()>> {
-        self.0.as_mut().poll_shutdown(cx)
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context) -> Poll<tokio::io::Result<()>> {
+        self.project_stream().poll_shutdown(cx)
     }
 }
 
